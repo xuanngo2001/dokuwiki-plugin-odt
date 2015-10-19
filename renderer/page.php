@@ -1858,6 +1858,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             // The attribute 'name' is optional!
             $match = substr ($this->doc, $first, $second - $first + $length + 1);
             $text = substr ($match, $end_first-$first+1, -($length + 1));
+            $text = trim ($text, ' ');
+            $text = strtolower ($text);
             $page = str_replace (' ', '_', $text);
             $opentag = substr ($match, 0, $end_first-$first);
             $name = substr ($opentag, $length_with_name);
@@ -1869,11 +1871,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
                 if ( $page == $params [1] ) {
                     $found = true;
                     $link  = '<text:a xlink:type="simple" xlink:href="#'.$params [0].'">';
-                    if ( !empty($name) ) {
-                        $link .= $name;
-                    } else {
-                        $link .= $text;
-                    }
+                    $link .= $text;
                     $link .= '</text:a>';
 
                     $this->doc = str_replace ($match, $link, $this->doc);
@@ -1940,7 +1938,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      */
     function locallink($hash, $name = NULL){
         $name  = $this->_getLinkTitle($name, $hash, $isImage);
-        $this->doc .= '<locallink name="'.$name.'">'.$hash.'</locallink>';
+        $this->doc .= '<locallink>'.$name.'</locallink>';
     }
 
     /**
