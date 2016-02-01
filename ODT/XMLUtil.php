@@ -377,4 +377,46 @@ class XMLUtil
         $end_length = strlen ('</'.$element.'>');
         return substr_replace ($xmlCode, $replacement, $start, $end-$start+$end_length);
     }
+
+    /**
+     * Helper function which returns the value of $attribute
+     * if found in $xml_code. Otherwise it returns NULL.
+     *
+     * @param  $attribute    The name of the attribute
+     * @param  $xmlCode      The XML code to search through
+     * @return string        Found value or NULL
+     */
+    public static function getAttributeValue ($attribute, $xmlCode) {
+        $pattern = '/\s'.$attribute.'="[^"]*"/';
+        if (preg_match ($pattern, $xmlCode, $matches) === 1) {
+            $value = substr($matches [0], strlen($attribute)+2);
+            $value = trim($value, '"');
+            return $value;
+        }
+        return NULL;
+    }
+
+    /**
+     * Helper function which stores all attributes
+     * in the array $attributes as name => value pairs.
+     *
+     * @param  $attributes    Array to store the attributes in
+     * @param  $xmlCode       The XML code to search through
+     * @return integer        Number of found attributes or 0
+     */
+    public static function getAttributes (&$attributes, $xmlCode) {
+        $pattern = '/\s[-:_.a-zA-Z0-9]+="[^"]*"/';
+        if (preg_match_all ($pattern, $xmlCode, $matches, PREG_SET_ORDER) > 0) {
+            foreach ($matches as $match) {
+                $equal_pos = strpos($match [0], '=');
+                $name = substr($match [0], 0, $equal_pos);
+                $name = trim($name);
+                $value = substr($match [0], $equal_pos+1);
+                $value = trim($value, '"');
+                $attributes [$name] = $value;
+            }
+            return count($attributes);
+        }
+        return 0;
+    }
 }
