@@ -32,8 +32,15 @@ $conf['margin_left']   = '2';
 $conf['disable_links'] = 'No';
 
 // TOC settings
-$conf['toc_maxlevel']    = '';
-$conf['toc_leader_sign'] = '.';
-$conf['toc_indents']     = '0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5';
-$conf['toc_pagebreak']   = 'Yes';
-$conf['toc_style']       = 'color:black;';
+$conf['toc_maxlevel']     = '';
+$conf['toc_leader_sign']  = '.';
+$conf['toc_indents']      = '0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5';
+$conf['toc_pagebreak']    = 'Yes';
+$conf['toc_style']        = 'color:black;';
+$conf['index_in_browser'] = 'hide';
+
+// Outline settings
+$conf['outline_list_style'] = 'Normal';
+
+// Conversion options
+$conf['convert_to_pdf'] = 'libreoffice --headless --convert-to pdf --outdir %outdir% %sourcefile% 2>&1';

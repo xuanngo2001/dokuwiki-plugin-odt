@@ -128,12 +128,16 @@ class syntax_plugin_odt extends DokuWiki_Syntax_Plugin {
                     } elseif($format == 'metadata') {
                         /** @var Doku_Renderer_metadata $renderer */
                         $renderer->meta['relation']['odt']['toc'] = $info_value;
+                    } elseif($format == 'xhtml') {
+                        $this->insert_index_preview ($renderer, 'toc');
                     }
                 break;
                 case 'chapter-index': // Insert chapter index in exported ODT file
                     if($format == 'odt') {
                         /** @var renderer_plugin_odt_page $renderer */
                         $renderer->render_index('chapter', $info_value);
+                    } elseif($format == 'xhtml') {
+                        $this->insert_index_preview ($renderer, 'chapter');
                     }
                 break;
                 case 'disablelinks': // Disable creating links and only show the text instead
@@ -202,9 +206,120 @@ class syntax_plugin_odt extends DokuWiki_Syntax_Plugin {
                         $renderer->setPageFormat(NULL,NULL,NULL,NULL,NULL,$margin);
                     }
                 break;
+                case 'templatepage': // Take wiki page content as additional CSS input
+                    if($format == 'odt' || $format == 'xhtml' ) {
+                        if ($this->check_templatepage ($info_value, $format) == true &&
+                            $format == 'odt' ) {
+                            /** @var renderer_plugin_odt_page $renderer */
+                            $renderer->read_templatepage($info_value);
+                        }
+                    }
+                break;
+                case 'frame-open': // Insert/Open ODT frame
+                    if($format == 'odt' ) {
+                        /** @var renderer_plugin_odt_page $renderer */
+                        $this->frame_open($renderer, $info_value);
+                    }
+                break;
+                case 'frame-close': // Close ODT frame
+                    if($format == 'odt' ) {
+                        /** @var renderer_plugin_odt_page $renderer */
+                        $this->frame_close($renderer);
+                    }
+                break;
             }
         }
         return false;
     }
 
+    /**
+     * Insert a browser preview for an index.
+     *
+     * @param  Doku_Renderer $renderer The current renderer
+     * @param  string        $type     The index type ('toc' or 'chapter)'
+     */
+    function insert_index_preview ($renderer, $type='toc') {
+        if ($this->config->getParam ('index_in_browser') == 'hide') {
+            return;
+        }
+        switch ($type) {
+            case 'toc':
+                $msg = $this->getLang('toc_msg');
+                $reminder = $this->getLang('update_toc_msg');
+            break;
+            case 'chapter':
+                $msg = $this->getLang('chapter_msg');
+                $reminder = $this->getLang('update_chapter_msg');
+            break;
+        }
+        $renderer->doc .= '<p class="index_preview_odt">';
+        $renderer->doc .= '<span id="text" class="index_preview_odt">'.$msg.'</span><br>';
+        $renderer->doc .= '<span id="reminder" class="index_preview_odt">'.$reminder.'</span>';
+        $renderer->doc .= '</p>';
+    }
+
+    /**
+     * Checl existance of the template page and display error
+     * message in case of xhtml rendering.
+     *
+     * @param  string $pagename The page to check
+     * @param  string $format   The render format ('xhtml' or 'odt')
+     */
+    protected function check_templatepage ($pagename, $format) {
+        $exists = false;
+        if (empty($pagename)) {
+            if ($format == 'xhtml') {
+                msg(sprintf("No page specified!", html_wikilink($pagename)), -1);
+            }
+            return (false);
+        }
+        resolve_pageid($INFO['namespace'], $pagename, $exists);
+        if(!$exists) {
+            if ($format == 'xhtml') {
+                msg(sprintf("Page not found!", html_wikilink($pagename)), -1);
+            }
+            return (false);
+        }
+        return (true);
+    }
+
+    /**
+     * Open a frame with a text box.
+     *
+     * @param  Doku_Renderer $renderer The current renderer object
+     * @param  string        $params   Parameters for the frame
+     */
+    protected function frame_open ($renderer, $params) {
+        // Get inline CSS for ODT frame
+        $odt_css = '';
+        if ( preg_match('/odt-css="[^"]+";/', $params, $matches) === 1 ) {
+            $quote = strpos ($matches [0], '"');
+            $temp = substr ($matches [0], $quote+1);
+            $temp = trim ($temp, '";');
+            $odt_css = $temp.';';
+        }
+        $odt_css_id = '';
+        if ( preg_match('/odt-css-id="[^"]+";/', $params, $matches) === 1 ) {
+            $quote = strpos ($matches [0], '"');
+            $temp = substr ($matches [0], $quote+1);
+            $temp = trim ($temp, '";');
+            $odt_css_id = $temp;
+        }
+        
+        $properties = array();
+        $renderer->getODTProperties ($properties, NULL, NULL, $odt_css, NULL, $odt_css_id);
+                
+        $renderer->_odtOpenTextBoxUseProperties2 ($properties);
+        $renderer->p_open();
+    }
+
+    /**
+     * Close a frame with a text box.
+     *
+     * @param  Doku_Renderer $renderer The current renderer object
+     */
+    protected function frame_close ($renderer) {        
+        $renderer->p_close();
+        $renderer->_odtCloseTextBox ();
+    }
 }

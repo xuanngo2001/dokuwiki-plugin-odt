@@ -170,6 +170,27 @@ class renderer_plugin_odt_page extends Doku_Renderer {
     }
 
     /**
+     * Change outline style to configured value.
+     */
+    protected function set_outline_style () {
+        $outline_style = $this->docHandler->getStyle('Outline');
+        if ($outline_style == NULL) {
+            // Outline style not found!
+            return;
+        }
+        switch ($this->config->getParam('outline_list_style')) {
+            case 'Numbers':
+                for ($level = 1 ; $level < 11 ; $level++) {
+                    $outline_style->setPropertyForLevel($level, 'num-format', '1');
+                    $outline_style->setPropertyForLevel($level, 'num-suffix', '.');
+                    $outline_style->setPropertyForLevel($level, 'num-prefix', ' ');
+                    $outline_style->setPropertyForLevel($level, 'display-levels', $level);
+                }
+                break;
+        }
+    }
+    
+    /**
      * Initialize the rendering
      */
     function document_start() {
@@ -192,6 +213,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
                 $this->docHandler = new ODTTemplateDH ();
                 $this->docHandler->setTemplate($this->config->getParam ('odt_template'));
                 $this->docHandler->setDirectory($this->config->getParam ('tpl_dir'));
+
+                // Do NOT overwrite outline style of ODT template.
                 break;
 
             case 'CSS template':
@@ -202,11 +225,17 @@ class renderer_plugin_odt_page extends Doku_Renderer {
                 $directory = $this->config->getParam ('tpl_dir');
                 $template_path = $this->config->getParam('mediadir').'/'.$directory."/".$template;
                 $this->docHandler->import($template_path, $media_sel, $this->config->getParam('mediadir'));
+
+                // Set outline style.
+                $this->set_outline_style();
                 break;
 
             default:
                 // Document from scratch.
                 $this->docHandler = new scratchDH ();
+
+                // Set outline style.
+                $this->set_outline_style();
                 break;
         }
 
@@ -242,18 +271,28 @@ class renderer_plugin_odt_page extends Doku_Renderer {
 
         //$headers = array('Content-Type'=>'text/plain'); p_set_metadata($ID,array('format' => array('odt' => $headers) )); return ; // DEBUG
         // send the content type header, new method after 2007-06-26 (handles caching)
-        $output_filename = str_replace(':','-',$ID).".odt";
-        if (version_compare($dw_version, "20070626")) {
-            // store the content type headers in metadata
-            $headers = array(
-                'Content-Type' => 'application/vnd.oasis.opendocument.text',
-                'Content-Disposition' => 'attachment; filename="'.$output_filename.'";',
-            );
-            p_set_metadata($ID,array('format' => array('odt_page' => $headers) ));
-        } else { // older method FIXME DEPRECATED
-            header('Content-Type: application/vnd.oasis.opendocument.text');
-            header('Content-Disposition: attachment; filename="'.$output_filename.'";');
+        $format = $this->config->getConvertTo ();
+        switch ($format) {
+            case 'pdf':
+                $output_filename = str_replace(':','-',$ID).'.pdf';
+                $headers = array(
+                    'Content-Type' => 'application/pdf',
+                    'Cache-Control' => 'must-revalidate, no-transform, post-check=0, pre-check=0',
+                    'Pragma' => 'public',
+                    'Content-Disposition' => 'attachment; filename="'.$output_filename.'";',
+                );
+                break;
+            case 'odt':
+            default:
+                $output_filename = str_replace(':','-',$ID).'.odt';
+                $headers = array(
+                    'Content-Type' => 'application/vnd.oasis.opendocument.text',
+                    'Content-Disposition' => 'attachment; filename="'.$output_filename.'";',
+                );
+                break;
         }
+        // store the content type headers in metadata
+        p_set_metadata($ID,array('format' => array('odt_page' => $headers) ));
 
         $this->set_page_bookmark($ID);
     }
@@ -265,6 +304,12 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         // Close any open paragraph if not done yet.
         $this->p_close ();
         
+        // Insert Indexes (if required), e.g. Table of Contents
+        $this->insert_indexes();
+
+        // Replace local link placeholders
+        $this->insert_locallinks();
+
         // DEBUG: The following puts out the loaded raw CSS code
         //$this->p_open();
         // This line outputs the raw CSS code
@@ -275,12 +320,6 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         //$this->p_open();
         //$this->doc .= 'Tracedump: '.$this->trace_dump;
         //$this->p_close();
-
-        // Insert Indexes (if required), e.g. Table of Contents
-        $this->insert_indexes();
-
-        // Replace local link placeholders
-        $this->insert_locallinks();
 
         // Build the document
         $this->finalize_ODTfile();
@@ -422,7 +461,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      * Such paragraphs may not be deleted!
      */
     protected function deleteUselessElements() {
-        $length_open = strlen ('<text:p>');
+        $length_open = strlen ('<text:p');
         $length_close = strlen ('</text:p>');
         $max = strlen ($this->doc);
         $pos = 0;
@@ -471,8 +510,60 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             }
 
             if ( $deleted == false ) {
-                $pos = $start_open + $length;
+                $pos = $start_close;
             }
+        }
+    }
+
+    /**
+     * Convert exported ODT file if required.
+     * Supported formats: pdf
+     */
+    protected function convert () {
+        global $ID;
+                
+        $format = $this->config->getConvertTo ();
+        if ($format == 'pdf') {
+            // Prepare temp directory
+            $temp_dir = $this->config->getParam('tmpdir');
+            $temp_dir = $temp_dir."/odt/".str_replace(':','-',$ID);
+            if (is_dir($temp_dir)) { io_rmdir($temp_dir,true); }
+            io_mkdir_p($temp_dir);
+
+            // Set source and dest file path
+            $file = $temp_dir.'/convert.odt';
+            $pdf_file = $temp_dir.'/convert.pdf';
+
+            // Prepare command line
+            $command = $this->config->getParam('convert_to_pdf');
+            $command = str_replace('%outdir%', $temp_dir, $command);
+            $command = str_replace('%sourcefile%', $file, $command);
+
+            // Convert file
+            io_saveFile($file, $this->doc);
+            exec ($command, $output, $result);
+            if ($result) {
+                $errormessage = '';
+                foreach ($output as $line) {
+                    $errormessage .= $this->_xmlEntities($line);
+                }
+                $message = $this->getLang('conversion_failed_msg');
+                $message = str_replace('%command%', $command, $message);
+                $message = str_replace('%errorcode%', $result, $message);
+                $message = str_replace('%errormessage%', $errormessage, $message);
+                $message = str_replace('%pageid%', $ID, $message);
+                
+                $instructions = p_get_instructions($message);
+                $this->doc = p_render('xhtml', $instructions, $info);
+
+                $headers = array(
+                    'Content-Type' =>  'text/html; charset=utf-8',
+                );
+                p_set_metadata($ID,array('format' => array('odt_page' => $headers) ));
+            } else {
+                $this->doc = io_readFile($pdf_file, false);
+            }
+            io_rmdir($temp_dir,true);
         }
     }
 
@@ -491,6 +582,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
 
         // Assign document
         $this->doc = $this->docHandler->get();
+
+        $this->convert();
     }
 
     /**
@@ -622,7 +715,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
     }
 
     /**
-     * This function builds a TOC or user-defined index (=chapter index).
+     * This function builds a TOC or chapter index.
      * The page numbers are just a counter. Update the TOC e.g. in LibreOffice to get the real page numbers!
      *
      * The layout settings are taken from the configuration and $settings.
@@ -703,6 +796,14 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             }
         }
 
+        // Determine text style for the index heading.
+        if ( preg_match('/styleH="[^"]+";/', $settings, $matches) === 1 ) {
+            $quote = strpos ($matches [0], '"');
+            $temp = substr ($matches [0], $quote+1);
+            $temp = trim ($temp, '";');
+            $styleH = $temp.';';
+        }
+
         // Determine text styles per level.
         // Syntax for a style level 1 is "styleL1="color:black;"".
         // The default style is just 'color:black;'.
@@ -716,6 +817,22 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             }
         }
 
+        // Create Heading style if not empty.
+        // Default index heading style is taken from styles.xml
+        $title_style = $this->docHandler->getStyleName('contents heading');
+        if (!empty($styleH)) {
+            $properties = array();
+            $this->_processCSSStyle ($properties, $styleH);
+            $properties ['style-parent'] = 'Heading';
+            $properties ['style-class'] = 'index';
+            $this->style_count++;
+            $properties ['style-name'] = 'Contents_20_Heading_'.$this->style_count;
+            $properties ['style-display-name'] = 'Contents Heading '.$this->style_count;
+            $style_obj = $this->factory->createParagraphStyle($properties);
+            $this->docHandler->addStyle($style_obj);
+            $title_style = $style_obj->getProperty('style-name');
+        }
+        
         // Create paragraph styles
         $p_styles = array();
         $p_styles_auto = array();
@@ -772,16 +889,12 @@ class renderer_plugin_odt_page extends Doku_Renderer {
                 $name = 'Table of Contents';
                 $index_name = 'Table of Contents';
                 $source_attrs = 'text:outline-level="'.$max_outline_level.'" text:use-index-marks="false"';
-                $title_style = $this->docHandler->getStyleName('heading1');
             break;
             case 'chapter':
-                $tag = 'user-index';
-                $name = 'Chapter Index';
-                // Do not change the index name, otherwise index body will be empty after update.
-                // Seems to be a LibreOffice issue.
-                $index_name = 'User-Defined';
-                $source_attrs = 'text:use-index-marks="true" text:copy-outline-levels="true" text:index-name="'.$index_name.'" text:index-scope="chapter"';
-                $title_style = $this->docHandler->getStyleName('standard');
+                $tag = 'table-of-content';
+                $name = 'Table of Contents';
+                $index_name = 'Table of Contents';
+                $source_attrs = 'text:outline-level="'.$max_outline_level.'" text:use-index-marks="false" text:index-scope="chapter"';
             break;
         }
 
@@ -905,33 +1018,24 @@ class renderer_plugin_odt_page extends Doku_Renderer {
     }
 
     /**
-     * Creates a reference ID for the user-index (chapter index)
+     * Add an item to the TOC
+     * (Dummy function required by the Doku_Renderer class)
      *
-     * @param string $title The headline/item title
-     * @return string
-     *
-     * @author LarsDW223
+     * @param string $id       the hash link
+     * @param string $text     the text to display
+     * @param int    $level    the nesting level
      */
-    protected function _buildUserIndexReferenceID($title) {
-        $title = str_replace(':','',cleanID($title));
-        $title = ltrim($title,'0123456789._-');
-        if(empty($title)) {
-            $title='NoTitle';
-        }
-
-        $this->refUserIndexIDCount++;
-        $ref = $title.'_'.$this->refUserIndexIDCount;
-        return $ref;
-    }
+    function toc_additem($id, $text, $level) {}
 
     /**
      * Add an item to the TOC
      *
      * @param string $refID    the reference ID
+     * @param string $hid      the hash link
      * @param string $text     the text to display
      * @param int    $level    the nesting level
      */
-    function toc_additem($refID, $hid, $text, $level) {
+    function toc_additem_internal($refID, $hid, $text, $level) {
         $item = $refID.','.$hid.','.$text.','. $level;
         $this->toc[] = $item;
     }
@@ -1101,7 +1205,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             // Attention: NOT if $text is empty. This would lead to empty lines before headings
             //            right after a pagebreak!
             $in_paragraph = $this->state->getInParagraph();
-            if ( ($this->pagebreak || $this->changePageFormat != NULL) && !$in_paragraph ) {
+            if ( ($this->pagebreak || $this->changePageFormat != NULL) || !$in_paragraph ) {
                 $this->p_open();
             }
         }
@@ -1293,7 +1397,6 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         $this->p_close();
         $hid = $this->_headerToLink($text,true);
         $TOCRef = $this->_buildTOCReferenceID($text);
-        $UIRef = $this->_buildUserIndexReferenceID($text);
         $style = $this->docHandler->getStyleName('heading'.$level);
         if ( $this->changePageFormat != NULL ) {
             $page_style = $this->doPageFormatChange($style);
@@ -1316,23 +1419,15 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         }
 
         $this->doc .= '<text:bookmark-start text:name="'.$TOCRef.'"/>';
-        if (!$this->state->getInFrame()) {
-            // User index marks in frames can cause ODT documents to become unreadable
-            // in LibreOffice (bug?). As a workaround do not include them in frames.
-            $this->doc .= '<text:user-index-mark-start text:id="'.$UIRef.'" text:index-name="User-Defined" text:outline-level="'.$level.'"/>';
-        }
         $this->doc .= '<text:bookmark-start text:name="'.$hid.'"/>';
         $this->doc .= $this->_xmlEntities($text);
         $this->doc .= '<text:bookmark-end text:name="'.$TOCRef.'"/>';
-        if (!$this->state->getInFrame()) {
-            $this->doc .= '<text:user-index-mark-end text:id="'.$UIRef.'"/>';
-        }
         $this->doc .= '<text:bookmark-end text:name="'.$hid.'"/>';
         $this->doc .= '</text:h>';
 
         // Do not add headings in frames
         if (!$this->state->getInFrame()) {
-            $this->toc_additem($TOCRef, $hid, $text, $level);
+            $this->toc_additem_internal($TOCRef, $hid, $text, $level);
         }
     }
 
@@ -1444,7 +1539,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      * @param int $maxcols maximum number of columns
      * @param int $numrows NOT IMPLEMENTED
      */
-    function table_open($maxcols = NULL, $numrows = NULL){
+    function table_open($maxcols = NULL, $numrows = NULL, $pos = NULL){
         // Close any open paragraph.
         $this->p_close();
         
@@ -1472,9 +1567,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
                     // (if not done yet, the name must be unique!)
                     $style_name = 'Table_Indentation_Level'.$level;
                     if (!$this->docHandler->styleExists($style_name)) {
-                        $properties = array();
-                        $properties ['style-name'] = $style_name;
-                        $style_obj = $this->factory->createTableTableStyle($properties);
+                        $style_obj = clone $this->docHandler->getStyle($table_style_name);
+                        $style_obj->setProperty('style-name', $style_name);
                         if ($style_obj != NULL) {
                             $max = $this->page->getAbsWidthMindMargins();
                             $indent = 0 + $this->units->getDigits($list_style->getPropertyFromLevel($level, 'margin-left'));
@@ -1543,7 +1637,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         }
     }
 
-    function table_close(){
+    function table_close($pos = NULL){
         $interrupted = false;
         if ($this->state->getListInterrupted()) {
             $interrupted = true;
@@ -1715,6 +1809,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         $this->doc .= '<text:list text:style-name="'.$style.'"';
         if ($continue) {
             $this->doc .= ' text:continue-numbering="true" ';
+        } else {
+            $this->doc .= ' text:continue-numbering="false" ';
         }
         $this->doc .= '>';
 
@@ -1767,7 +1863,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      *
      * @param int $level the nesting level
      */
-    function listitem_open($level) {
+    function listitem_open($level, $node = false) {
         // Set marker that list interruption has stopped!!!
         if ($this->state != NULL ) {
             $this->state->setListInterrupted(false);
@@ -2239,7 +2335,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      * @param bool   $returnonly whether to return odt or write to doc attribute
      * @see http://en.wikipedia.org/wiki/CamelCase
      */
-    function camelcaselink($link, $returnonly) {
+    function camelcaselink($link, $returnonly = false) {
         if($returnonly) {
           return $this->internallink($link,$link, null, true);
         } else {
@@ -2481,7 +2577,7 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      * @param string|array $name       name for the link, array for media file
      * @param bool         $returnonly whether to return odt or write to doc attribute
      */
-    function emaillink($address, $name = NULL, $returnonly) {
+    function emaillink($address, $name = NULL, $returnonly = false) {
         $name  = $this->_getLinkTitle($name, $address, $isImage);
         if($returnonly) {
           return $this->_doLink("mailto:".$address,$name);
@@ -2761,6 +2857,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      * @param  $returnonly
      */
     function _odtAddImage($src, $width = NULL, $height = NULL, $align = NULL, $title = NULL, $style = NULL, $returnonly = false){
+        static $z = 0;
+
         $doc = '';
         if (file_exists($src)) {
             list($ext,$mime) = mimetype($src);
@@ -2784,8 +2882,12 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             $anchor = 'as-char';
         }
 
-        if (!$style or !$this->docHandler->styleExists($style)) {
-            $style = $this->docHandler->getStyleName('media '.$align);
+        if (empty($style) || !$this->docHandler->styleExists($style)) {
+            if (!empty($align)) {
+                $style = $this->docHandler->getStyleName('media '.$align);
+            } else {
+                $style = $this->docHandler->getStyleName('media');
+            }
         }
 
         // Open paragraph if necessary
@@ -2799,9 +2901,15 @@ class renderer_plugin_odt_page extends Doku_Renderer {
             $doc .= '<draw:text-box>';
             $doc .= '<text:p text:style-name="'.$this->docHandler->getStyleName('legend center').'">';
         }
-        $doc .= '<draw:frame draw:style-name="'.$style.'" draw:name="'.$this->_xmlEntities($title).'"
-                        text:anchor-type="'.$anchor.'" draw:z-index="0"
-                        svg:width="'.$width.'" svg:height="'.$height.'" >';
+        if (!empty($title)) {
+            $doc .= '<draw:frame draw:style-name="'.$style.'" draw:name="'.$this->_xmlEntities($title).'"
+                            text:anchor-type="'.$anchor.'" draw:z-index="'.$z.'"
+                            svg:width="'.$width.'" svg:height="'.$height.'" >';
+        } else {
+            $doc .= '<draw:frame draw:style-name="'.$style.'" draw:name="'.$z.'"
+                            text:anchor-type="'.$anchor.'" draw:z-index="'.$z.'"
+                            svg:width="'.$width.'" svg:height="'.$height.'" >';
+        }
         $doc .= '<draw:image xlink:href="'.$this->_xmlEntities($name).'"
                         xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>';
         $doc .= '</draw:frame>';
@@ -2814,6 +2922,8 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         } else {
           $this->doc .= $doc;
         }
+
+        $z++;
     }
 
     /**
@@ -4154,6 +4264,249 @@ class renderer_plugin_odt_page extends Doku_Renderer {
     }
 
     /**
+     * This function opens a textbox in a frame.
+     * This function uses the properties in a different way than
+     *  _odtOpenTextBoxUseProperties.
+     *
+     * The currently supported CSS properties are:
+     * background-color, color, padding, margin, display, border-radius, min-height.
+     * The background-image is simulated using a picture frame.
+     * FIXME: Find a way to successfuly use the background-image in the graphic style (see comments).
+     *
+     * The div should be closed by calling '_odtDivCloseAsFrame'.
+     *
+     * @author LarsDW223
+     *
+     * @param array $properties
+     */
+    function _odtOpenTextBoxUseProperties2 ($properties) {
+        if ($this->state->getInFrame()) {
+            // Do not open a nested frame as this will make the content ofthe nested frame disappear.
+            //return;
+        }
+
+        $this->div_z_index += 5;
+        $this->style_count++;
+
+        $valign = $properties ['vertical-align'];
+        $top = $properties ['top'];
+        $left = $properties ['left'];
+        $position = $properties ['position'];
+        $bg_color = $properties ['background-color'];
+        $color = $properties ['color'];
+        $padding_left = $properties ['padding-left'];
+        $padding_right = $properties ['padding-right'];
+        $padding_top = $properties ['padding-top'];
+        $padding_bottom = $properties ['padding-bottom'];
+        $margin_left = $properties ['margin-left'];
+        $margin_right = $properties ['margin-right'];
+        $margin_top = $properties ['margin-top'];
+        $margin_bottom = $properties ['margin-bottom'];
+        $display = $properties ['display'];
+        $border = $properties ['border'];
+        $border_color = $properties ['border-color'];
+        $border_width = $properties ['border-width'];
+        $radius = $properties ['border-radius'];
+        $picture = $properties ['background-image'];
+        $pic_positions = preg_split ('/\s/', $properties ['background-position']);
+
+        $min_height = $properties ['min-height'];
+        $width = $properties ['width'];
+        $horiz_pos = $properties ['float'];
+
+        $pic_link = '';
+        $pic_width = '';
+        $pic_height = '';
+        if ( !empty ($picture) ) {
+            // If a picture/background-image is set in the CSS, than we insert it manually here.
+            // This is a workaround because ODT does not support the background-image attribute in a span.
+            $pic_link=$this->_odtAddImageAsFileOnly($picture);
+            list($pic_width, $pic_height) = $this->_odtGetImageSizeString($picture);
+        }
+
+        if ( empty($horiz_pos) ) {
+            $horiz_pos = 'center';
+        }
+        if ( empty ($width) ) {
+            $width = '100%';
+        }
+        if ( !empty($pic_positions [0]) ) {
+            $pic_positions [0] = $this->adjustXLengthValueForODT ($pic_positions [0]);
+        }
+        if ( empty($min_height) ) {
+            $min_height = '1pt';
+        }
+        if ( empty($top) ) {
+            $top = '0cm';
+        }
+        if ( empty($left) ) {
+            $left = '0cm';
+        } else {
+            $horiz_pos = 'from-left';
+        }
+
+        // Different handling for relative and absolute size...
+        if ( $width [strlen($width)-1] == '%' ) {
+            // Convert percentage values to absolute size, respecting page margins
+            $width = trim($width, '%');
+            $width_abs = $this->_getAbsWidthMindMargins ($width).'cm';
+        } else {
+            // Absolute values may include not supported units.
+            // Adjust.
+            $width_abs = $this->adjustXLengthValueForODT($width);
+        }
+
+
+        // Add our styles.
+        $style_name = 'odt_auto_style_div_'.$this->style_count;
+
+        switch ($position) {
+            case 'absolute':
+                $anchor_type = 'page';
+                break;
+            case 'relative':
+                $anchor_type = 'paragraph';
+                break;
+            case 'static':
+            default:
+                $anchor_type = 'paragraph';
+                $top = '0cm';
+                $left = '0cm';
+                break;
+        }
+        // FIXME: Later try to get nested frames working - probably with anchor = as-char
+        //if ($this->state->getInFrame()) {
+        //    $anchor_type = 'as-char';
+        //}
+        switch ($anchor_type) {
+            case 'page':
+                $style =
+                '<style:style style:name="'.$style_name.'_text_frame" style:family="graphic">
+                     <style:graphic-properties style:run-through="foreground" style:wrap="run-through"
+                      style:number-wrapped-paragraphs="no-limit" style:vertical-pos="from-top" style:vertical-rel="page"
+                      style:horizontal-pos="from-left" style:horizontal-rel="page"
+                      draw:wrap-influence-on-position="once-concurrent" style:flow-with-text="false" ';
+                break;
+            default:
+                $style =
+                '<style:style style:name="'.$style_name.'_text_frame" style:family="graphic">
+                     <style:graphic-properties
+                      draw:textarea-horizontal-align="left"
+                    style:horizontal-pos="'.$horiz_pos.'" style:background-transparency="100%" style:wrap="none" ';
+                break;
+        }
+
+        if ( !empty($valign) ) {
+            $style .= 'draw:textarea-vertical-align="'.$valign.'" ';
+        }
+        if ( !empty($bg_color) ) {
+            $style .= 'fo:background-color="'.$bg_color.'" ';
+            $style .= 'draw:fill="solid" draw:fill-color="'.$bg_color.'" ';
+        } else {
+            $style .= 'draw:fill="none" ';
+        }
+        if ( !empty($border_color) ) {
+            $style .= 'svg:stroke-color="'.$border_color.'" ';
+        } else {
+            $style .= 'draw:stroke="none" ';
+        }
+        if ( !empty($border_width) ) {
+            $style .= 'svg:stroke-width="'.$border_width.'" ';
+        }
+        if ( !empty($padding_left) ) {
+            $style .= 'fo:padding-left="'.$padding_left.'" ';
+        }
+        if ( !empty($padding_right) ) {
+            $style .= 'fo:padding-right="'.$padding_right.'" ';
+        }
+        if ( !empty($padding_top) ) {
+            $style .= 'fo:padding-top="'.$padding_top.'" ';
+        }
+        if ( !empty($padding_bottom) ) {
+            $style .= 'fo:padding-bottom="'.$padding_bottom.'" ';
+        }
+        if ( !empty($margin_left) ) {
+            $style .= 'fo:margin-left="'.$margin_left.'" ';
+        }
+        if ( !empty($margin_right) ) {
+            $style .= 'fo:margin-right="'.$margin_right.'" ';
+        }
+        if ( !empty($margin_top) ) {
+            $style .= 'fo:margin-top="'.$margin_top.'" ';
+        }
+        if ( !empty($margin_bottom) ) {
+            $style .= 'fo:margin-bottom="'.$margin_bottom.'" ';
+        }
+        if ( !empty ($fo_border) ) {
+            $style .= 'fo:border="'.$fo_border.'" ';
+        }
+        $style .= 'fo:min-height="'.$min_height.'" ';
+        $style .= '>';
+
+        // FIXME: Delete the part below 'if ( $picture != NULL ) {...}'
+        // and use this background-image definition. For some reason the background-image is not displayed.
+        // Help is welcome.
+        /*$style .= '<style:background-image ';
+        $style .= 'xlink:href="'.$pic_link.'" xlink:type="simple" xlink:actuate="onLoad"
+                   style:position="center center" style:repeat="no-repeat" draw:opacity="100%"/>';*/
+        $style .= '</style:graphic-properties>';
+        $style .= '</style:style>';
+        $style .= '<style:style style:name="'.$style_name.'_image_frame" style:family="graphic">
+             <style:graphic-properties
+                 draw:stroke="none"
+                 draw:fill="none"
+                 draw:textarea-horizontal-align="left"
+                 draw:textarea-vertical-align="center"
+                 style:wrap="none"/>
+         </style:style>';
+
+        // Add style to our document
+        // (as unknown style because style-family graphic is not supported)
+        $style_obj = ODTUnknownStyle::importODTStyle($style);
+        $this->docHandler->addAutomaticStyle($style_obj);
+
+        // Group the frame so that they are stacked one on each other.
+        $this->p_close();
+        $this->p_open();
+        $this->linebreak();
+        if ( $display == NULL ) {
+            $this->doc .= '<draw:g draw:z-index="'.($this->div_z_index + 0).'">';
+        } else {
+            $this->doc .= '<draw:g draw:display="' . $display . '">';
+        }
+
+        // Draw a frame with the image in it, if required.
+        // FIXME: delete this part if 'background-image' in graphic style is working.
+        if ( $picture != NULL )
+        {
+            $this->doc .= '<draw:frame draw:style-name="'.$style_name.'_image_frame" draw:name="Bild1"
+                                svg:x="'.$pic_positions [0].'" svg:y="'.$pic_positions [0].'"
+                                svg:width="'.$pic_width.'" svg:height="'.$pic_height.'"
+                                draw:z-index="'.($this->div_z_index + 1).'">
+                               <draw:image xlink:href="'.$pic_link.'"
+                                xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>
+                                </draw:frame>';
+        }
+
+        // Draw a frame with a text box in it. the text box will be left opened
+        // to grow with the content (requires fo:min-height in $style_name).
+        $this->doc .= '<draw:frame draw:style-name="'.$style_name.'_text_frame" draw:name="Bild1"
+                            svg:x="'.$left.'" svg:y="'.$top.'"
+                            svg:width="'.$width_abs.'" svg:height="'.$min_height.'" ';
+        $this->doc .= 'draw:z-index="'.($this->div_z_index + 0).'">';
+        $this->doc .= '<draw:text-box ';
+
+        // If required use round corners.
+        if ( !empty($radius) )
+            $this->doc .= 'draw:corner-radius="'.$radius.'" ';
+
+        $this->doc .= '>';
+        $this->state->enter('frame', 'frame');
+        $this->state->setInFrame(true);
+        $this->state->setInParagraph(false);
+    }
+
+    /**
      * This function closes a textbox (previously opened with _odtOpenTextBoxUseProperties).
      *
      * @author LarsDW223
@@ -4193,12 +4546,12 @@ class renderer_plugin_odt_page extends Doku_Renderer {
      * @param $classString
      * @param $inlineStyle
      */
-    public function getODTProperties (&$dest, $element, $classString, $inlineStyle, $media_sel=NULL) {
+    public function getODTProperties (&$dest, $element, $classString, $inlineStyle, $media_sel=NULL, $cssId=NULL) {
         if ($media_sel === NULL) {
             $media_sel = $this->config->getParam ('media_sel');
         }
         // Get properties for our class/element from imported CSS
-        $this->import->getPropertiesForElement($dest, $element, $classString, $media_sel);
+        $this->import->getPropertiesForElement($dest, $element, $classString, $media_sel, $cssId);
 
         // Interpret and add values from style to our properties
         $this->_processCSSStyle($dest, $inlineStyle);
@@ -4369,7 +4722,26 @@ class renderer_plugin_odt_page extends Doku_Renderer {
         return $value;
     }
 
+    /**
+     * This function read the template page and imports all cdata and code content
+     * as additional CSS. ATTENTION: this might overwrite already imported styles
+     * from an ODT or CSS template file.
+     *
+     * @param $pagename The name of the template page
+     */
+    public function read_templatepage ($pagename) {
+        $instructions = p_cached_instructions(wikiFN($pagename));
+        $text = '';
+        foreach($instructions as $instruction) {
+            if($instruction[0] == 'code') {
+                $text .= $instruction[1][0];
+            } elseif ($instruction[0] == 'cdata') {
+                $text .= $instruction[1][0];
+            }
+        }
 
+        $this->docHandler->import_css_from_string ($text, $media_sel, $this->config->getParam('mediadir'));
+    }
 }
 
 //Setup VIM: ex: et ts=4 enc=utf-8 :

@@ -78,7 +78,7 @@ strong {
  * DokuWiki syntax: __Underlined text__
  */
 u {
-    text-underline-style: solid;
+    text-decoration: underline;
 }
 
 /* Monospaced text
@@ -91,7 +91,7 @@ code {
  * DokuWiki syntax: <del>Deleted text</del>
  */
 del {
-    text-line-through-style: solid;
+    text-decoration: line-through;
 }
 
 /* Preformatted Text
@@ -149,6 +149,8 @@ quotation5 {
  */
 table {
     border-collapse: collapse;
+    margin-top: 0.25cm;
+    margin-bottom: 0.25cm;
 }
 
 /* Table header
@@ -299,14 +301,14 @@ ol.level10 {
  */
 internetlink {
     color: #000080;
-    text-underline-style: solid;
+    text-decoration: underline;
 }
 
 /* Visited internet link
  */
 visitedinternetlink {
     color: #800000;
-    text-underline-style: solid;
+    text-decoration: underline;
 }
 
 /* Local link
@@ -314,7 +316,7 @@ visitedinternetlink {
 locallink {
     color: #000000;
     font-weight: bold;
-    text-underline-style: solid;
+    text-decoration: underline;
 }
 
 /* Visited local link
@@ -322,5 +324,5 @@ locallink {
 visitedlocallink {
     color: #000000;
     font-weight: bold;
-    text-underline-style: solid;
+    text-decoration: underline;
 }

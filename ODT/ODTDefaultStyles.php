@@ -56,7 +56,7 @@ class ODTDefaultStyles extends ODTStyleSet
                   style:horizontal-rel="paragraph"/>
             </style:style>
             <style:style style:name="Table" style:family="table">
-                <style:table-properties table:border-model="collapsing"/>
+                <style:table-properties table:border-model="collapsing" fo:margin-top="0.25cm" fo:margin-bottom="0.25cm"/>
             </style:style>
             <style:style style:name="tablealigncenter" style:family="paragraph" style:parent-style-name="Table_20_Contents">
                 <style:paragraph-properties fo:text-align="center"/>
@@ -164,6 +164,7 @@ class ODTDefaultStyles extends ODTStyleSet
             case 'visited internet link': return 'Visited_20_Internet_20_Link';
             case 'local link':            return 'Local_20_link';
             case 'visited local link':    return 'Visited_20_Local_20_Link';
+            case 'contents heading':      return 'Contents_20_Heading';
         }
         // Not supported basic style.
         return NULL;

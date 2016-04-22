@@ -17,6 +17,7 @@ class helper_plugin_odt_config extends DokuWiki_Plugin {
     protected $config = array();
     protected $mode = null;
     protected $messages = null;
+    protected $convert_to = null;
 
     /**
      * @return array
@@ -352,6 +353,33 @@ class helper_plugin_odt_config extends DokuWiki_Plugin {
                   'hasMeta'            => true,
                   'addMetaAtStartOnly' => false,
                   'refresh'            => false);
+        // Index display in browser
+        $this->config ['index_in_browser'] =
+            array('value'              => NULL,
+                  'DWGlobalName'       => NULL,
+                  'hasGlobal'          => true,
+                  'hasURL'             => true,
+                  'hasMeta'            => true,
+                  'addMetaAtStartOnly' => false,
+                  'refresh'            => false);
+        // Index display in browser
+        $this->config ['outline_list_style'] =
+            array('value'              => NULL,
+                  'DWGlobalName'       => NULL,
+                  'hasGlobal'          => true,
+                  'hasURL'             => true,
+                  'hasMeta'            => true,
+                  'addMetaAtStartOnly' => false,
+                  'refresh'            => false);
+        // Command line template for pdf conversion
+        $this->config ['convert_to_pdf']  =
+            array('value'              => NULL,
+                  'DWGlobalName'       => NULL,
+                  'hasGlobal'          => true,
+                  'hasURL'             => true,
+                  'hasMeta'            => false,
+                  'addMetaAtStartOnly' => false,
+                  'refresh'            => false);
     }
 
     /**
@@ -619,5 +647,24 @@ class helper_plugin_odt_config extends DokuWiki_Plugin {
      */
     public function getMessages() {
         return $this->messages;
+    }
+
+    /**
+     * Set conversion option.
+     *
+     * @param string $format Conversion format (e.g. 'pdf')
+     */
+    public function setConvertTo($format) {
+        $this->convert_to = $format;
+    }
+
+    /**
+     * Set conversion option.
+     *
+     * @return string Currently set conversion option
+     *                or NULL (output ODT format)
+     */
+    public function getConvertTo() {
+        return ($this->convert_to);
     }
 }
