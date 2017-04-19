@@ -15,6 +15,8 @@ if(!defined('DOKU_INC')) die();
  * Class action_plugin_odt_export
  *
  * Collect pages and export these. GUI is available via bookcreator.
+ * 
+ * @package DokuWiki\Action\Export
  */
 class action_plugin_odt_export extends DokuWiki_Action_Plugin {
     protected $config = null;
@@ -31,7 +33,8 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
      */
     public function register(Doku_Event_Handler $controller) {
         $controller->register_hook('ACTION_ACT_PREPROCESS', 'BEFORE', $this, 'convert', array());
-        $controller->register_hook('TEMPLATE_PAGETOOLS_DISPLAY', 'BEFORE', $this, 'addbutton', array());
+        $controller->register_hook('TEMPLATE_PAGETOOLS_DISPLAY', 'BEFORE', $this, 'addbutton_odt', array());
+        $controller->register_hook('TEMPLATE_PAGETOOLS_DISPLAY', 'BEFORE', $this, 'addbutton_pdf', array());
     }
 
     /**
@@ -39,7 +42,7 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
      *
      * @param Doku_Event $event
      */
-    public function addbutton(Doku_Event $event) {
+    public function addbutton_odt(Doku_Event $event) {
         global $ID, $REV;
 
         if($this->getConf('showexportbutton') && $event->data['view'] == 'main') {
@@ -54,6 +57,33 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
                           '<li>'
                           . '<a href="' . wl($ID, $params) . '"  class="action export_odt" rel="nofollow" title="' . $this->getLang('export_odt_button') . '">'
                           . '<span>' . $this->getLang('export_odt_button') . '</span>'
+                          . '</a>'
+                          . '</li>'
+                ) +
+                array_slice($event->data['items'], -1, 1, true);
+        }
+    }
+
+    /**
+     * Add 'export odt=>pdf'-button to pagetools
+     *
+     * @param Doku_Event $event
+     */
+    public function addbutton_pdf(Doku_Event $event) {
+        global $ID, $REV;
+
+        if($this->getConf('showpdfexportbutton') && $event->data['view'] == 'main') {
+            $params = array('do' => 'export_odt_pdf');
+            if($REV) {
+                $params['rev'] = $REV;
+            }
+
+            // insert button at position before last (up to top)
+            $event->data['items'] = array_slice($event->data['items'], 0, -1, true) +
+                array('export_odt_pdf' =>
+                          '<li>'
+                          . '<a href="' . wl($ID, $params) . '"  class="action export_odt_pdf" rel="nofollow" title="' . $this->getLang('export_odt_pdf_button') . '">'
+                          . '<span>' . $this->getLang('export_odt_pdf_button') . '</span>'
                           . '</a>'
                           . '</li>'
                 ) +
@@ -86,12 +116,13 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
         // check conversion format and adjust $ACT
         if ($odt_export && strpos($ACT, '_pdf') !== false) {
             $format = 'pdf';
-            $ACT = str_replace ('_pdf', '', $ACT);
         }
 
         // single page export: rename to the actual renderer component
         if($ACT == 'export_odt') {
             $ACT = 'export_odt_page';
+        } else if ($ACT == 'export_odt_pdf') {
+            $ACT = 'export_odt_pagepdf';
         }
 
         if( !is_array($ACT) && $odt_export ) {
@@ -213,12 +244,38 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
         } elseif(isset($_COOKIE['list-pagelist']) && !empty($_COOKIE['list-pagelist'])) {
             // Here is $ACT == 'export_odtbook'
 
+            /** @deprecated  April 2016 replaced by localStorage version of Bookcreator*/
+
             //is in Bookmanager of bookcreator plugin a title given?
             if(!$title = $INPUT->str('book_title')) {
                 $this->showPageWithErrorMsg($event, 'needtitle');
                 return false;
             } else {
                 $list = explode("|", $_COOKIE['list-pagelist']);
+            }
+
+        } elseif($INPUT->has('selection')) {
+            //handle Bookcreator requests based at localStorage
+//            if(!checkSecurityToken()) {
+//                http_status(403);
+//                print $this->getLang('empty');
+//                exit();
+//            }
+
+            $json = new JSON(JSON_LOOSE_TYPE);
+            $list = $json->decode($INPUT->post->str('selection', '', true));
+            if(!is_array($list) || empty($list)) {
+                http_status(400);
+                print $this->getLang('empty');
+                exit();
+            }
+
+            $title = $INPUT->str('pdfbook_title'); //DEPRECATED
+            $title = $INPUT->str('book_title', $title, true);
+            if(empty($title)) {
+                http_status(400);
+                print $this->getLang('needtitle');
+                exit();
             }
 
         } else {
@@ -228,6 +285,30 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
         }
 
         $list = array_map('cleanID', $list);
+
+        $skippedpages = array();
+        foreach($list as $index => $pageid) {
+            if(auth_quickaclcheck($pageid) < AUTH_READ) {
+                $skippedpages[] = $pageid;
+                unset($list[$index]);
+            }
+        }
+        $list = array_filter($list); //removes also pages mentioned '0'
+
+        //if selection contains forbidden pages throw (overridable) warning
+        if(!$INPUT->bool('book_skipforbiddenpages') && !empty($skippedpages)) {
+            $msg = sprintf($this->getLang('forbidden'), hsc(join(', ', $skippedpages)));
+            if($INPUT->has('selection')) {
+                http_status(400);
+                print $msg;
+                exit();
+            } else {
+                $this->showPageWithErrorMsg($event, null, $msg);
+                return false;
+            }
+
+        }
+
         return array($title, $list);
     }
 
@@ -329,14 +410,15 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
 
         // loop over all pages
         $xmlcontent = '';
+        foreach($this->list as $page) {
+            $filename = wikiFN($page, $REV);
 
-        $cnt = count($this->list);
-        for($n = 0; $n < $cnt; $n++) {
-            $page = $this->list[$n];
-
+            if(!file_exists($filename)) {
+                continue;
+            }
             // set global pageid to the rendered page
             $ID = $page;
-            $xmlcontent .= p_render('odt_book', p_cached_instructions(wikiFN($page, $REV),false,$page), $info);
+            $xmlcontent .= p_render('odt_book', p_cached_instructions($filename, false, $page), $info);
         }
 
         //restore ID
@@ -366,6 +448,9 @@ class action_plugin_odt_export extends DokuWiki_Action_Plugin {
         } else {
             header('Content-Disposition: inline; filename="' . $filename . '.odt";');
         }
+
+        //Bookcreator uses jQuery.fileDownload.js, which requires a cookie.
+        header('Set-Cookie: fileDownload=true; path=/');
 
         //try to send file, and exit if done
         http_sendfile($cachefile);
