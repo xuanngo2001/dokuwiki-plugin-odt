@@ -347,7 +347,7 @@ class ODTUtility
 
         // First do simple adjustments per property
         foreach ($properties as $property => $value) {
-            $properties [$property] = ODTUtility::adjustValueForODT ($property, $value, $units);
+            $properties [$property] = self::adjustValueForODT ($property, $value, $units);
         }
 
         // Adjust relative margins if $maxWidth is given.
@@ -511,7 +511,7 @@ class ODTUtility
         $params->import->getPropertiesForElement($dest, $toMatch, $params->units);
 
         // Adjust values for ODT
-        ODTUtility::adjustValuesForODT($dest, $params->units, $maxWidth);
+        self::adjustValuesForODT($dest, $params->units, $maxWidth);
     }
 
     /**
@@ -548,7 +548,7 @@ class ODTUtility
         $params->import->getPropertiesForElement($dest, $toMatch, $params->units, $inherit);
 
         // Adjust values for ODT
-        ODTUtility::adjustValuesForODT($dest, $params->units, $maxWidth);
+        self::adjustValuesForODT($dest, $params->units, $maxWidth);
 
         // Remove element from stack
         $params->htmlStack->removeCurrent();
@@ -636,7 +636,7 @@ class ODTUtility
      * @param array $matches
      * @return string
      */
-    function _preserveSpace($matches){
+    protected static function _preserveSpace($matches){
         $spaces = $matches[1];
         $len    = strlen($spaces);
         return '<text:s text:c="'.$len.'"/>';
@@ -647,7 +647,7 @@ class ODTUtility
         if ($styleName == NULL || !$params->document->styleExists($styleName)) {
             // Get properties
             $properties = array();        
-            ODTUtility::getHTMLElementProperties ($params, $properties, $element, $attributes);
+            self::getHTMLElementProperties ($params, $properties, $element, $attributes);
 
             if ($styleName == NULL) {
                 $properties ['style-name'] = ODTStyle::getNewStylename ('span');
@@ -665,6 +665,92 @@ class ODTUtility
         }
     }
 
+    protected static function createParagraphStyle (ODTInternalParams $params, $element, $attributes, $styleName=NULL) {
+        // Create automatic style
+        if ($styleName == NULL || !$params->document->styleExists($styleName)) {
+            // Get properties
+            $properties = array();        
+            self::getHTMLElementProperties ($params, $properties, $element, $attributes);
+
+            if ($styleName == NULL) {
+                $properties ['style-name'] = ODTStyle::getNewStylename ('span');
+            } else {
+                // Use callers style name. He needs to be sure that it's unique!
+                $properties ['style-name'] = $styleName;
+            }
+            $params->document->createParagraphStyle($properties, false);
+
+            // Return style name
+            return $properties ['style-name'];
+        } else {
+            // Style already exists
+            return $styleName;
+        }
+    }
+
+    /**
+     * Convenience function for converting some HTML code to ODT format.
+     * The function will try to automatically create any needed ODT styles
+     * from the CSS code found in the HTML code.
+     *
+     * Also some special settings can be passed in the options array:
+     *
+     * $options ['p_style']:
+     * The default paragraph style. If empty 'body' will be used.
+     *
+     * $options ['list_p_style']:
+     * The default paragraph style in lists. If empty 'body' will be used.
+     *
+     * $options ['list_ol_style']:
+     * The default style for ordered lists. If empty 'numbering' will be used.
+     *
+     * $options ['list_ul_style']:
+     * The default style for un-ordered lists. If empty 'list' will be used.
+     *
+     * $options ['media_selector']:
+     * The media selector used for CSS handling (e.g. 'screen' or 'print').
+     * If empty the current/configured one will be used.
+     *
+     * $options ['element']:
+     * If not empty an HTML tag named '$options ['element']' will be pushed
+     * on the internal HTML stack before converting the $HTMLCode.
+     * This influences CSS handling.
+     *
+     * $options ['attributes']:
+     * The attributes to set for '$options ['element']'.
+     *
+     * $options ['escape_content']:
+     * Should have the value 'true' or 'false' (as string!). If 'true'
+     * XML entities will be escaped. Otherwise it is assumed that it
+     * already has been done.
+     *
+     * $options ['class']:
+     * Optional CSS class to add to found 'class="..."' attributes in
+     * the HTML code.
+     *
+     * $options ['style_names']:
+     * If set to 'prefix_and_class' then ODT style names will not be
+     * generated dynamically but are constructed from '$options ['style_names_prefix']'
+     * following the CSS class name(s).
+     *
+     * $options ['linebreaks']:
+     * If set to 'remove' then linebreaks will be ignored. Otherwise
+     * they will be kept and converted to proper ODT linebreaks.
+     *
+     * $options ['tabs']:
+     * If set to 'remove' then tabs will be ignored. Otherwise they
+     * will be kept and converted to proper ODT tabs.
+     *
+     * $options ['space']:
+     * If set to 'preserve' then space is preserved like for preformatted
+     * code blocks. Otherwise space is not preserved and multiple spaces
+     * will apear as only one space.
+     *
+     * @author LarsDW223
+     * @param ODTInternalParams $params   The internal params
+     * @param string            $HTMLCode The HTML code to convert
+     * @param array             $options  Array of options
+     */
     public static function generateODTfromHTMLCode(ODTInternalParams $params, $HTMLCode, array $options){
         $elements = array ('sup' => array ('open' => '<text:span text:style-name="sup">',
                                            'close' => '</text:span>'),
@@ -698,6 +784,13 @@ class ODTUtility
         $HTMLCode = preg_replace('/\n&nbsp;$/', '', $HTMLCode);
         $HTMLCode = str_replace('&nbsp;', '&#xA0;', $HTMLCode);
 
+        // Get default paragraph style
+        if (!empty($options ['p_style'])) {
+            $p_style = $options ['p_style'];
+        } else {
+            $p_style = $params->document->getStyleName('body');
+        }
+
         // Get default list style names
         if (!empty($options ['list_p_style'])) {
             $p_list_style = $options ['list_p_style'];
@@ -730,7 +823,7 @@ class ODTUtility
         $max = strlen ($HTMLCode);
         $pos = 0;
         while ($pos < $max) {
-            $found = ODTUtility::getNextTag($HTMLCode, $pos);
+            $found = self::getNextTag($HTMLCode, $pos);
             if ($found !== false) {
                 $entry = array();
                 $entry ['content'] = substr($HTMLCode, $pos, $found [0]-$pos);
@@ -774,6 +867,7 @@ class ODTUtility
         $checked = array();
         $first = true;
         $firstTag = '';
+        $olStartValue = NULL;
         for ($out = 0 ; $out < count($parsed) ; $out++) {
             if ($checked [$out] !== NULL) {
                 continue;
@@ -843,9 +937,44 @@ class ODTUtility
                             case 'ol':
                                 $checked [$out] = '<text:list text:style-name="'.$ol_list_style.'" text:continue-numbering="false">';
                                 $checked [$in] = '</text:list>';
+                                if (preg_match('/start="[^"]*"/', $found ['attributes'], $matches) == 1) {
+                                    $olStartValue = substr($matches [0], 7);
+                                    $olStartValue = trim($olStartValue, '"');
+                                }
                                 break;
                             case 'li':
-                                $checked [$out] = '<text:list-item><text:p text:style-name="'.$p_list_style.'">';
+                                // Create ODT span using CSS style from attributes
+                                $haveClass = false;
+                                if (!empty($options ['class'])) {
+                                    if (preg_match('/class="[^"]*"/', $found ['attributes'], $matches) == 1) {
+                                        $class_attr = substr($matches [0], 7);
+                                        $class_attr = trim($class_attr, '"');
+                                        $class_attr = 'class="'.$options ['class'].' '.$class_attr.'"';
+                                        $found ['attributes'] = str_replace($matches [0], $class_attr, $found ['attributes']);
+                                        $haveClass = true;
+                                    }
+                                }
+                                $style_name = NULL;
+                                if ($options ['style_names'] == 'prefix_and_class') {
+                                    if (preg_match('/class="[^"]*"/', $found ['attributes'], $matches) == 1) {
+                                        $class_attr = substr($matches [0], 7);
+                                        $class_attr = trim($class_attr, '"');
+                                        $style_name = $options ['style_names_prefix'].$class_attr;
+                                        $haveClass = true;
+                                    }
+                                }
+                                if ($haveClass) {
+                                    $style_name = self::createParagraphStyle ($params, 'li', $found ['attributes'], $style_name);
+                                } else {
+                                    $style_name = $p_list_style;
+                                }
+
+                                $checked [$out] = '<text:list-item';
+                                if ($olStartValue !== NULL) {
+                                    $checked [$out] .= ' text:start-value="'.$olStartValue.'"';
+                                    $olStartValue = NULL;
+                                }
+                                $checked [$out] .= '><text:p text:style-name="'.$style_name.'">';
                                 $checked [$in] = '</text:p></text:list-item>';
                                 break;
                             default:
@@ -882,7 +1011,8 @@ class ODTUtility
                 $params->document->paragraphClose();
                 break;
             default:
-                $params->document->paragraphOpen();
+                $params->document->paragraphClose();
+                $params->document->paragraphOpen($p_style);
                 break;
         }
 
@@ -909,7 +1039,7 @@ class ODTUtility
 
         // Preserve space?
         if ($options ['space'] === 'preserve') {
-            $content = preg_replace_callback('/(  +)/',array('ODTUtility','_preserveSpace'),$content);
+            $content = preg_replace_callback('/(  +)/',array(__CLASS__, '_preserveSpace'), $content);
         }
 
         $params->content .= $content;
